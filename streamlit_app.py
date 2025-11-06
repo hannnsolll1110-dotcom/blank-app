@@ -53,10 +53,11 @@ st.sidebar.caption(src)
 if df is None or df.empty:
     st.stop()
 
+# 컬럼명 정리
 df.columns = [c.strip().lower() for c in df.columns]
 
 # ----------------------------
-# 컬럼 매핑(데이터셋 변형 대응, 없으면 건너뜀)
+# 컬럼 매핑(유연 대응)
 # ----------------------------
 CAND = {
     "target": ["attrition_flag", "churn", "is_churn", "customer_status"],
@@ -70,14 +71,15 @@ CAND = {
     "contacts_m": ["contacts_count_12_mon", "contacts_12m", "contacts"],
     "credit_limit": ["credit_limit", "clv", "creditlimit"],
     "total_bal": ["total_trans_amt", "total_balance", "total_amt"],
-    "total_cnt": ["total_trans_ct", "txn_count", "trans_count"]
+    "total_cnt": ["total_trans_ct", "txn_count", "trans_count"],
 }
-def pick(name_list): 
+def pick(name_list):
     for c in name_list:
-        if c in df.columns: return c
+        if c in df.columns:
+            return c
     return None
 
-COL = {k: pick(v) for k,v in CAND.items()}
+COL = {k: pick(v) for k, v in CAND.items()}
 target_col = COL["target"]
 if target_col is None:
     st.error("이탈 타깃 컬럼을 찾지 못함. 후보: " + ", ".join(CAND["target"]))
@@ -85,49 +87,46 @@ if target_col is None:
 
 # 타깃 표준화(1=이탈, 0=유지)
 y_raw = df[target_col].astype(str).str.lower()
-if set(np.unique(y_raw)) - {"0","1"}:
-    y = y_raw.isin(["1","true","yes","y","attrited customer","churned","attrited","exited"]).astype(int)
+if set(np.unique(y_raw)) - {"0", "1"}:
+    y = y_raw.isin(["1", "true", "yes", "y", "attrited customer", "churned", "attrited", "exited"]).astype(int)
 else:
     y = y_raw.astype(int)
 
-# 피처 구성(있으면 사용)
+# 피처 선택(존재하는 것만)
 feature_candidates = [
     COL["age"], COL["gender"], COL["marital"], COL["income_cat"], COL["card_type"],
     COL["tenure"], COL["inactive_m"], COL["contacts_m"],
-    COL["credit_limit"], COL["total_bal"], COL["total_cnt"]
+    COL["credit_limit"], COL["total_bal"], COL["total_cnt"],
 ]
 features = [c for c in feature_candidates if c is not None]
-X = df[features].copy()
+if len(features) == 0:
+    st.error("사용 가능한 피처가 없습니다. 다른 CSV를 올리거나 컬럼명을 확인하세요.")
+    st.stop()
 
+X = df[features].copy()
 num_cols = [c for c in features if pd.api.types.is_numeric_dtype(X[c])]
 cat_cols = [c for c in features if c not in num_cols]
 
 # ----------------------------
-# 사이드바 필터(핵심만)
+# 사이드바 필터(간단)
 # ----------------------------
 st.sidebar.header("필터")
+mask = pd.Series(True, index=X.index)
+
 if COL["age"] in X.columns:
     a_min, a_max = int(X[COL["age"]].min()), int(X[COL["age"]].max())
     age_range = st.sidebar.slider("연령 범위", a_min, a_max, (a_min, a_max))
-else:
-    age_range = None
+    mask &= X[COL["age"]].between(age_range[0], age_range[1])
 
 if COL["inactive_m"] in X.columns:
     i_max = int(X[COL["inactive_m"]].max())
     inact = st.sidebar.slider("최근 12개월 비활성 개월", 0, i_max, (0, i_max))
-else:
-    inact = None
-
-mask = pd.Series(True, index=X.index)
-if age_range and COL["age"] in X.columns:
-    mask &= (X[COL["age"]].between(age_range[0], age_range[1]))
-if inact and COL["inactive_m"] in X.columns:
-    mask &= (X[COL["inactive_m"]].between(inact[0], inact[1]))
+    mask &= X[COL["inactive_m"]].between(inact[0], inact[1])
 
 Xf, yf = X[mask].copy(), y[mask].copy()
 
 # ----------------------------
-# 탭: ①개요 ②모델 ③세그먼트
+# 탭: ①개요 ②이탈 예측 ③취약 세그먼트
 # ----------------------------
 tab1, tab2, tab3 = st.tabs(["① 개요", "② 이탈 예측(간단)", "③ 취약 세그먼트"])
 
@@ -143,27 +142,27 @@ with tab1:
         c4.metric("평균 가입기간(개월)", f"{Xf[COL['tenure']].mean():.2f}")
 
     st.markdown("**이탈/유지 분포**")
-    lab = yf.replace({1:"Churned", 0:"Active"})
-    st.plotly_chart(px.histogram(lab, color=lab), use_container_width=True)
+    dist_df = pd.DataFrame({"status": yf.replace({1: "Churned", 0: "Active"})})
+    st.plotly_chart(px.histogram(dist_df, x="status", color="status"), use_container_width=True)
 
-    # 연령/비활성 간단 분포
+    # 주요 변수 분포(이탈 여부별)
     plots = [COL["age"], COL["inactive_m"], COL["total_cnt"], COL["credit_limit"]]
     plots = [c for c in plots if c in Xf.columns]
     if plots:
         st.markdown("**주요 변수 분포(이탈 여부별)**")
         for c in plots:
-            st.plotly_chart(
-                px.box(pd.DataFrame({c: Xf[c], "churn": yf}), x="churn", y=c, points="suspectedoutliers", color="churn"),
-                use_container_width=True
-            )
+            tmp = pd.DataFrame({c: Xf[c], "churn": yf.replace({1: "Churned", 0: "Active"})})
+            st.plotly_chart(px.box(tmp, x="churn", y=c, color="churn", points="suspectedoutliers"),
+                            use_container_width=True)
 
-# ② 이탈 예측(간단)
+# ② 이탈 예측(로지스틱만)
 with tab2:
     st.subheader("로지스틱 회귀 — 간단 지표")
     test_size = st.slider("검증 비율", 0.1, 0.4, 0.2, step=0.05)
     rnd = st.number_input("random_state", 1, 9999, 42, step=1)
 
-    X_train, X_test, y_train, y_test = train_test_split(Xf, yf, test_size=test_size, random_state=rnd, stratify=yf)
+    X_train, X_test, y_train, y_test = train_test_split(Xf, yf, test_size=test_size,
+                                                        random_state=rnd, stratify=yf)
 
     pre = ColumnTransformer(
         transformers=[
@@ -186,44 +185,53 @@ with tab2:
 
     # 변수 중요도(절대 계수 Top 12)
     try:
-        ohe = pipe.named_steps["prep"].named_transformers_["cat"]
+        ohe = pipe.named_steps["prep"].named_transformers_.get("cat", None)
         num_names = num_cols
-        cat_names = list(ohe.get_feature_names_out(cat_cols)) if len(cat_cols)>0 else []
+        cat_names = list(ohe.get_feature_names_out(cat_cols)) if (ohe is not None and len(cat_cols) > 0) else []
         feat_names = num_names + cat_names
         coefs = np.abs(pipe.named_steps["clf"].coef_[0])
         if len(coefs) == len(feat_names):
-            imp = pd.DataFrame({"feature": feat_names, "importance": coefs}).sort_values("importance", ascending=False).head(12)
+            imp = pd.DataFrame({"feature": feat_names, "importance": coefs}).sort_values(
+                "importance", ascending=False
+            ).head(12)
             st.markdown("**변수 중요도(Top 12)**")
-            st.plotly_chart(px.bar(imp, x="importance", y="feature", orientation="h"), use_container_width=True)
-    except Exception:
-        st.info("변수 중요도를 계산할 수 없음(피처명/계수 불일치).")
+            st.plotly_chart(px.bar(imp, x="importance", y="feature", orientation="h"),
+                            use_container_width=True)
+        else:
+            st.info("변수 중요도를 표시할 수 없음(피처명/계수 길이 불일치).")
+    except Exception as e:
+        st.info(f"변수 중요도 계산 불가: {e}")
 
 # ③ 취약 세그먼트
 with tab3:
     st.subheader("취약 세그먼트 인사이트")
-    # 연령대별 이탈률
+
+    # 연령대별 이탈률(카테고리 → 문자열 변환로 안전하게)
     if COL["age"] in Xf.columns:
-        bins = [0,30,40,50,60,70,200]
-        labels = ["<30","30s","40s","50s","60s","70+"]
+        bins = [0, 30, 40, 50, 60, 70, 200]
+        labels = ["<30", "30s", "40s", "50s", "60s", "70+"]
         age_bin = pd.cut(Xf[COL["age"]], bins=bins, labels=labels, right=False)
-        ag = pd.DataFrame({"age_bin": age_bin, "churn": yf})
-        ag = ag.groupby("age_bin")["churn"].mean().reset_index()
+        ag = pd.DataFrame({"age_bin": age_bin.astype(str), "churn": yf})
+        ag = ag.groupby("age_bin", dropna=False)["churn"].mean().reset_index()
         st.markdown("**연령대별 이탈률**")
-        st.plotly_chart(px.bar(ag, x="age_bin", y="churn", text="churn", range_y=[0,1]), use_container_width=True)
+        st.plotly_chart(px.bar(ag, x="age_bin", y="churn", text="churn", range_y=[0, 1]),
+                        use_container_width=True)
 
     # 비활성 개월 vs 이탈률
     if COL["inactive_m"] in Xf.columns:
         tmp = pd.DataFrame({COL["inactive_m"]: Xf[COL["inactive_m"]].astype(int), "churn": yf})
         gr = tmp.groupby(COL["inactive_m"])["churn"].mean().reset_index()
         st.markdown("**최근 12개월 비활성 개월 수 vs 이탈률**")
-        st.plotly_chart(px.line(gr, x=COL["inactive_m"], y="churn", markers=True), use_container_width=True)
+        st.plotly_chart(px.line(gr, x=COL["inactive_m"], y="churn", markers=True),
+                        use_container_width=True)
 
-    # 거래건수/한도 힌트(간단)
+    # 거래건수 분위별 이탈률(Interval → 문자열 변환)
     if COL["total_cnt"] in Xf.columns:
         st.markdown("**거래건수 분위별 이탈률**")
         q = pd.qcut(Xf[COL["total_cnt"]], q=5, duplicates="drop")
-        g = pd.DataFrame({"bin": q, "churn": yf}).groupby("bin")["churn"].mean().reset_index()
-        st.plotly_chart(px.bar(g, x="bin", y="churn"), use_container_width=True)
+        g = pd.DataFrame({"bin": q.astype(str), "churn": yf}).groupby("bin")["churn"].mean().reset_index()
+        st.plotly_chart(px.bar(g, x="bin", y="churn", text="churn", range_y=[0, 1]),
+                        use_container_width=True)
 
 st.divider()
 st.caption("해석: 비활성↑·거래건수↓·(필요 시) 고연령대에서 이탈률 상승 → 간편인증/리마인드/상담연결 등 재활성 전략 우선 적용")
