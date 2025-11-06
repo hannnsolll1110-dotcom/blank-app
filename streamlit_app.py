@@ -12,8 +12,8 @@ from sklearn.linear_model import LogisticRegression
 
 import plotly.express as px
 
-st.set_page_config(page_title="신용카드 고객 이탈 대시보드(간단版)", page_icon="💳", layout="wide")
-st.title("💳 신용카드 고객 이탈(Churn) 대시보드 — 간단版")
+st.set_page_config(page_title="신용카드 고객 이탈 대시보드", page_icon="💳", layout="wide")
+st.title("💳 신용카드 고객 이탈(Churn) 대시보드")
 st.caption("목적: 고객 이탈 예측 → 취약 세그먼트 식별 → 서비스 개선 포인트 제시")
 
 # ----------------------------
