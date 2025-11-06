@@ -12,63 +12,53 @@ from sklearn.linear_model import LogisticRegression
 
 import plotly.express as px
 
-# --------------------------------
-# 화면 설정
-# --------------------------------
 st.set_page_config(page_title="신용카드 고객 이탈 대시보드", page_icon="💳", layout="wide")
 st.title("💳 신용카드 고객 이탈 대시보드")
 st.caption("목적: 고객 이탈 예측 → 취약 세그먼트 식별 → 서비스 개선 포인트 제시")
 
-# Kaggle/파일명 화면 노출 숨김 플래그
-HIDE_SOURCE = True
-
-# --------------------------------
+# ----------------------------
 # 데이터 로드
-# --------------------------------
-def load_from_kagglehub(hide_source=True):
-    """kagglehub 데이터셋을 내려받아 churn/attrition 관련 CSV를 자동 선택함"""
+# ----------------------------
+st.sidebar.header("데이터")
+mode = st.sidebar.radio("데이터 소스", ["KaggleHub 자동 다운로드", "CSV 업로드"], horizontal=True)
+
+def load_from_kagglehub():
+    """kagglehub: gonieahn/zero-base-project-creditcard-analysis"""
     try:
         import kagglehub
         path = kagglehub.dataset_download("gonieahn/zero-base-project-creditcard-analysis")
         candidates = glob.glob(os.path.join(path, "**", "*.csv"), recursive=True)
         if not candidates:
-            return None, (None if hide_source else "CSV 파일이 없습니다.")
+            return None, "CSV 파일이 없습니다."
         ranked = sorted(
             candidates,
             key=lambda p: (("churn" not in p.lower()) and ("attrition" not in p.lower()), len(p))
         )
         df = pd.read_csv(ranked[0])
-        msg = None if hide_source else f"Loaded: {pathlib.Path(ranked[0]).name}"
-        return df, msg
+        return df, f"Loaded: {pathlib.Path(ranked[0]).name}"
     except Exception as e:
-        return None, (None if hide_source else f"오류: {type(e).__name__}")
-
-st.sidebar.header("데이터")
-mode = st.sidebar.radio("데이터 소스", ["KaggleHub 자동 다운로드", "CSV 업로드"], horizontal=True)
+        return None, f"오류: {e}"
 
 if mode == "CSV 업로드":
     up = st.sidebar.file_uploader("CSV 업로드", type=["csv"])
     if up:
         df = pd.read_csv(up)
-        src = None if HIDE_SOURCE else f"Uploaded: {up.name}"
+        src = f"Uploaded: {up.name}"
     else:
-        df, src = None, (None if HIDE_SOURCE else "CSV 업로드 필요")
+        df, src = None, "CSV 업로드 필요"
 else:
-    df, src = load_from_kagglehub(hide_source=HIDE_SOURCE)
+    df, src = load_from_kagglehub()
 
-if (not HIDE_SOURCE) and src:
-    st.sidebar.caption(src)
-
+st.sidebar.caption(src)
 if df is None or df.empty:
-    st.warning("데이터를 불러오지 못했음. CSV 업로드 또는 KaggleHub 선택 후 재시도 바람.")
     st.stop()
 
-# 컬럼명 소문자 통일
+# 컬럼명 정리
 df.columns = [c.strip().lower() for c in df.columns]
 
-# --------------------------------
+# ----------------------------
 # 컬럼 매핑(유연 대응)
-# --------------------------------
+# ----------------------------
 CAND = {
     "target": ["attrition_flag", "churn", "is_churn", "customer_status"],
     "age": ["age", "customer_age"],
@@ -83,8 +73,8 @@ CAND = {
     "total_bal": ["total_trans_amt", "total_balance", "total_amt"],
     "total_cnt": ["total_trans_ct", "txn_count", "trans_count"],
 }
-def pick(cands): 
-    for c in cands:
+def pick(name_list):
+    for c in name_list:
         if c in df.columns:
             return c
     return None
@@ -102,7 +92,7 @@ if set(np.unique(y_raw)) - {"0", "1"}:
 else:
     y = y_raw.astype(int)
 
-# 사용할 피처(존재하는 것만)
+# 피처 선택(존재하는 것만)
 feature_candidates = [
     COL["age"], COL["gender"], COL["marital"], COL["income_cat"], COL["card_type"],
     COL["tenure"], COL["inactive_m"], COL["contacts_m"],
@@ -110,16 +100,16 @@ feature_candidates = [
 ]
 features = [c for c in feature_candidates if c is not None]
 if len(features) == 0:
-    st.error("사용 가능한 피처가 없음. 다른 CSV를 올리거나 컬럼명을 확인 바람.")
+    st.error("사용 가능한 피처가 없습니다. 다른 CSV를 올리거나 컬럼명을 확인하세요.")
     st.stop()
 
 X = df[features].copy()
 num_cols = [c for c in features if pd.api.types.is_numeric_dtype(X[c])]
 cat_cols = [c for c in features if c not in num_cols]
 
-# --------------------------------
+# ----------------------------
 # 사이드바 필터(간단)
-# --------------------------------
+# ----------------------------
 st.sidebar.header("필터")
 mask = pd.Series(True, index=X.index)
 
@@ -135,9 +125,9 @@ if COL["inactive_m"] in X.columns:
 
 Xf, yf = X[mask].copy(), y[mask].copy()
 
-# --------------------------------
+# ----------------------------
 # 탭: ①개요 ②이탈 예측 ③취약 세그먼트
-# --------------------------------
+# ----------------------------
 tab1, tab2, tab3 = st.tabs(["① 개요", "② 이탈 예측(간단)", "③ 취약 세그먼트"])
 
 # ① 개요
@@ -155,6 +145,7 @@ with tab1:
     dist_df = pd.DataFrame({"status": yf.replace({1: "Churned", 0: "Active"})})
     st.plotly_chart(px.histogram(dist_df, x="status", color="status"), use_container_width=True)
 
+    # 주요 변수 분포(이탈 여부별)
     plots = [COL["age"], COL["inactive_m"], COL["total_cnt"], COL["credit_limit"]]
     plots = [c for c in plots if c in Xf.columns]
     if plots:
@@ -183,6 +174,7 @@ with tab2:
     clf = LogisticRegression(max_iter=300, class_weight="balanced")
     pipe = Pipeline([("prep", pre), ("clf", clf)])
     pipe.fit(X_train, y_train)
+
     pred = pipe.predict(X_test)
 
     cols = st.columns(4)
@@ -214,6 +206,7 @@ with tab2:
 with tab3:
     st.subheader("취약 세그먼트 인사이트")
 
+    # 연령대별 이탈률(카테고리 → 문자열 변환로 안전하게)
     if COL["age"] in Xf.columns:
         bins = [0, 30, 40, 50, 60, 70, 200]
         labels = ["<30", "30s", "40s", "50s", "60s", "70+"]
@@ -224,6 +217,7 @@ with tab3:
         st.plotly_chart(px.bar(ag, x="age_bin", y="churn", text="churn", range_y=[0, 1]),
                         use_container_width=True)
 
+    # 비활성 개월 vs 이탈률
     if COL["inactive_m"] in Xf.columns:
         tmp = pd.DataFrame({COL["inactive_m"]: Xf[COL["inactive_m"]].astype(int), "churn": yf})
         gr = tmp.groupby(COL["inactive_m"])["churn"].mean().reset_index()
@@ -231,6 +225,7 @@ with tab3:
         st.plotly_chart(px.line(gr, x=COL["inactive_m"], y="churn", markers=True),
                         use_container_width=True)
 
+    # 거래건수 분위별 이탈률(Interval → 문자열 변환)
     if COL["total_cnt"] in Xf.columns:
         st.markdown("**거래건수 분위별 이탈률**")
         q = pd.qcut(Xf[COL["total_cnt"]], q=5, duplicates="drop")
